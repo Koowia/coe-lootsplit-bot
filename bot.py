@@ -1,14 +1,15 @@
 import discord
 from discord.ext import commands
 import aiohttp
+from aiohttp import web
 import asyncio
 import json
 import re
 import os
 from datetime import datetime
 
-TOKEN = os.environ['TOKEN']
-GOOGLE_SCRIPT_URL = os.environ['GOOGLE_SCRIPT_URL']
+TOKEN = os.environ["TOKEN"]
+GOOGLE_SCRIPT_URL = os.environ["GOOGLE_SCRIPT_URL"]
 OFFICER_ROLE_IDS = [
     1531315951235240087,
 ]
@@ -21,6 +22,19 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 nick_cache = set()
 
 
+async def handle_ping(request):
+    return web.Response(text="OK")
+
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+
+
 async def post_to_sheet(data, retries=3):
     for attempt in range(retries):
         try:
@@ -28,13 +42,15 @@ async def post_to_sheet(data, retries=3):
                 async with session.post(
                     GOOGLE_SCRIPT_URL,
                     json=data,
-                    timeout=aiohttp.ClientTimeout(total=35)
+                    timeout=aiohttp.ClientTimeout(total=35),
                 ) as response:
                     return await response.text()
 
         except asyncio.TimeoutError:
             if attempt < retries - 1:
-                print(f"⏱️ Таймаут (попытка {attempt + 1}/{retries}), повторяю через 2 сек...")
+                print(
+                    f"⏱️ Таймаут (попытка {attempt + 1}/{retries}), повторяю через 2 сек..."
+                )
                 await asyncio.sleep(2)
             else:
                 print("❌ Таймаут после 3 попыток")
@@ -67,8 +83,8 @@ async def update_cache():
 
 
 def clean_nick(discord_nick: str) -> str:
-    nick = re.sub(r'^\[.*?\]\s*', '', discord_nick)
-    nick = re.sub(r'^!+\s*', '', nick)
+    nick = re.sub(r"^\[.*?\]\s*", "", discord_nick)
+    nick = re.sub(r"^!+\s*", "", nick)
     return nick.strip()
 
 
@@ -81,7 +97,9 @@ def is_officer(member: discord.Member) -> bool:
 
 @bot.event
 async def on_ready():
+    await start_web_server()
     print(f"✅ Бот {bot.user} запущен!")
+    print("✅ Web-сервер запущен (порт 8080)")
     await update_cache()
 
 
@@ -91,12 +109,18 @@ async def on_command_error(ctx, error):
         embed = discord.Embed(
             title="❌ Неизвестная команда",
             description=f"Команда `{ctx.message.content.split()[0]}` не существует",
-            color=discord.Color.red()
+            color=discord.Color.red(),
         )
-        embed.add_field(name="Что делать", value="Напиши `!help` чтобы увидеть список команд", inline=False)
+        embed.add_field(
+            name="Что делать",
+            value="Напиши `!help` чтобы увидеть список команд",
+            inline=False,
+        )
         await ctx.send(embed=embed)
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ Не хватает аргумента: `{error.param.name}`\nПример: `!split 30м @ник1, @ник2`")
+        await ctx.send(
+            f"❌ Не хватает аргумента: `{error.param.name}`\nПример: `!split 30м @ник1, @ник2`"
+        )
     else:
         print(f"⚠️ Ошибка: {error}")
 
@@ -107,19 +131,21 @@ async def split(ctx, amount: str, *, players: str):
         embed = discord.Embed(
             title="🚫 Доступ запрещён",
             description="У вас нет доступа для данной команды",
-            color=discord.Color.red()
+            color=discord.Color.red(),
         )
         await ctx.send(embed=embed)
         return
 
-    amount = amount.lower().replace('м', 'm')
-    if 'm' in amount:
-        total_amount = float(amount.replace('m', '')) * 1000000
+    amount = amount.lower().replace("м", "m")
+    if "m" in amount:
+        total_amount = float(amount.replace("m", "")) * 1000000
     else:
         total_amount = float(amount)
 
-    players = re.sub(r'<@!?(\d+)>', r'\1', players)
-    nicks = list(dict.fromkeys([n.strip() for n in re.split(r'[,\s]+', players) if n.strip()]))
+    players = re.sub(r"<@!?(\d+)>", r"\1", players)
+    nicks = list(
+        dict.fromkeys([n.strip() for n in re.split(r"[,\s]+", players) if n.strip()])
+    )
 
     if not nicks:
         await ctx.send("❌ Укажи участников! Пример: `!split 30м @ник1, @ник2`")
@@ -133,9 +159,13 @@ async def split(ctx, amount: str, *, players: str):
         embed = discord.Embed(
             title="❌ Операция отменена",
             description=f"Не найдены в таблице: {', '.join(not_found)}",
-            color=discord.Color.red()
+            color=discord.Color.red(),
         )
-        embed.add_field(name="Что делать", value="Проверь написание или добавь в таблицу. После добавления напиши `!reload`", inline=False)
+        embed.add_field(
+            name="Что делать",
+            value="Проверь написание или добавь в таблицу. После добавления напиши `!reload`",
+            inline=False,
+        )
         await ctx.send(embed=embed)
         return
 
@@ -146,21 +176,35 @@ async def split(ctx, amount: str, *, players: str):
 
     players_data = [{"nick": n, "amount": per_person} for n in nicks]
 
-    result = await post_to_sheet({
-        "action": "add_batch",
-        "players": players_data,
-        "date": datetime.now().strftime("%d.%m.%Y"),
-        "caller": ctx.author.name
-    })
+    result = await post_to_sheet(
+        {
+            "action": "add_batch",
+            "players": players_data,
+            "date": datetime.now().strftime("%d.%m.%Y"),
+            "caller": ctx.author.name,
+        }
+    )
 
-    if result == "OK":
+    result_ok = result == "OK"
+    if not result_ok:
+        try:
+            result_data = json.loads(result)
+            result_ok = result_data.get("status") == "OK"
+        except (json.JSONDecodeError, AttributeError):
+            result_ok = False
+
+    if result_ok:
         embed = discord.Embed(
             title="✅ Лут распределен!",
             description=f"**{ctx.author.display_name}** провел сплит",
-            color=discord.Color.gold()
+            color=discord.Color.gold(),
         )
-        embed.add_field(name="Сумма к распределению", value=f"{total_amount:,.0f} 💰", inline=False)
-        embed.add_field(name="На человека", value=f"**{per_person:,.0f}** 💵", inline=False)
+        embed.add_field(
+            name="Сумма к распределению", value=f"{total_amount:,.0f} 💰", inline=False
+        )
+        embed.add_field(
+            name="На человека", value=f"**{per_person:,.0f}** 💵", inline=False
+        )
         embed.add_field(name="Участников", value=f"{count} чел.", inline=True)
         embed.set_footer(text=f"CoE LootSplit • {datetime.now().strftime('%d.%m.%Y')}")
         await msg.edit(content="", embed=embed)
@@ -169,7 +213,7 @@ async def split(ctx, amount: str, *, players: str):
 
 
 @bot.command(name="balance")
-async def balance(ctx, *, nick: str = None):
+async def balance(ctx, *, nick: str | None = None):
     if nick is None:
         nick = clean_nick(ctx.author.display_name)
 
@@ -182,9 +226,13 @@ async def balance(ctx, *, nick: str = None):
         embed = discord.Embed(
             title="❌ Игрок не найден",
             description=f"Ник **{nick}** отсутствует в таблице",
-            color=discord.Color.red()
+            color=discord.Color.red(),
         )
-        embed.add_field(name="Возможные причины", value="• Опечатка в нике\n• Игрок не добавлен в таблицу\n• Другой ник в игре и Discord", inline=False)
+        embed.add_field(
+            name="Возможные причины",
+            value="• Опечатка в нике\n• Игрок не добавлен в таблицу\n• Другой ник в игре и Discord",
+            inline=False,
+        )
         await ctx.send(embed=embed)
         return
 
@@ -200,10 +248,13 @@ async def balance(ctx, *, nick: str = None):
         data = json.loads(result)
         if data.get("status") == "found":
             embed = discord.Embed(
-                title=f"💼 Баланс: {data['nick']}",
-                color=discord.Color.blue()
+                title=f"💼 Баланс: {data['nick']}", color=discord.Color.blue()
             )
-            embed.add_field(name="Текущий баланс", value=f"**{data['balance']:,.0f}** 💰", inline=False)
+            embed.add_field(
+                name="Текущий баланс",
+                value=f"**{data['balance']:,.0f}** 💰",
+                inline=False,
+            )
             await msg.edit(content="", embed=embed)
         else:
             await msg.edit(content=f"❌ Игрок **{nick}** не найден в таблице")
@@ -226,25 +277,24 @@ async def reload_cache(ctx):
 @bot.command(name="help")
 async def help_command(ctx):
     embed = discord.Embed(
-        title="📖 CoE LootSplit — Команды",
-        color=discord.Color.dark_gold()
+        title="📖 CoE LootSplit - Команды", color=discord.Color.dark_gold()
     )
     embed.add_field(
         name="💼 Баланс",
         value="`!balance [ник]` - для просмотра чужого баланса\n`!balance` - для просмотра своего баланса",
-        inline=False
+        inline=False,
     )
 
     if is_officer(ctx.author):
         embed.add_field(
             name="💰 Распределить лут (только для офицеров)",
             value="`!split <сумма> <ники>`\nПримеры:\n`!split 24м @Artem, @Ivan`\n`!split 15000000 ник1 ник2`",
-            inline=False
+            inline=False,
         )
         embed.add_field(
             name="🔄 Обновить кэш",
             value="`!reload` - обновить список ников из таблицы",
-            inline=False
+            inline=False,
         )
         embed.color = discord.Color.gold()
         embed.set_footer(text="CoE LootSplit • Crown of Eteriy • Режим: Офицер")
